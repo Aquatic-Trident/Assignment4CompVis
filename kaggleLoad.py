@@ -4,25 +4,34 @@ import os
 import glob
 import torch
 import xml.etree.ElementTree as ET
-import torchvision.transforms as T
 from PIL import Image
 from settings import *
+from ImgResize import *
+import numpy as np
 
 # Define transformations
-transform = T.Compose([
-    T.Resize((INPUT_IMG_SZ, INPUT_IMG_SZ)),
-    T.ToTensor()
-])
+
 
 def Download():
     # Download latest version
     path = kagglehub.dataset_download("andrewmvd/dog-and-cat-detection", output_dir=DIR)
     base_dir = DIR + '/'
-    dataset = CatDogDataset(img_dir=base_dir+IMG_DIR, ann_dir=base_dir+ANNOTATION_DIR, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=lambda x: tuple(zip(*x)))
+    dataset = CatDogDataset(img_dir=base_dir+IMG_DIR, ann_dir=base_dir+ANNOTATION_DIR, transform=ComposeTransform())
 
     print("Path to dataset files:", path)
-    return dataset, dataloader
+    return dataset
+
+def Split(data, ratio):
+    # Create Validation-set
+    data1_size = int(len(data) * ratio)
+    data2_size = int(len(data) - data1_size)
+    data1, data2 = torch.utils.data.random_split(data, [data1_size, data2_size])
+
+    return data1.dataset, data2.dataset
+
+def Loader(data):
+    return DataLoader(data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=lambda x: tuple(zip(*x)))
+
 
 class CatDogDataset(Dataset):
     def __init__(self, img_dir, ann_dir, transform=None):
@@ -60,23 +69,22 @@ class CatDogDataset(Dataset):
         ann_path = self.ann_files[idx]
 
         image = Image.open(img_path).convert("RGB")
-        width, height, objects = self.parse_annotation(ann_path)
-
-        scaler_x = width / INPUT_IMG_SZ
-        scaler_y = height / INPUT_IMG_SZ
+        _, _, objects = self.parse_annotation(ann_path)
 
         bboxes = []
         for obj in objects:
-            xmin = obj['bbox'][0] / scaler_x
-            ymin = obj['bbox'][1] / scaler_y
-            xmax = obj['bbox'][2] / scaler_x
-            ymax = obj['bbox'][3] / scaler_y
+            xmin = obj['bbox'][0]
+            ymin = obj['bbox'][1]
+            xmax = obj['bbox'][2]
+            ymax = obj['bbox'][3]
             bboxes.append([xmin, ymin, xmax, ymax])  # in your assignment 4, you need to convert bbox into [x, y, w, h] and value range [0, 1]
 
         bboxes = torch.tensor(bboxes, dtype=torch.float32)
         labels = torch.tensor([obj["label"] for obj in objects], dtype=torch.int64)
 
         if self.transform:
-            image = self.transform(image)
+            for box_trans, params in self.transform[1]:
+                bboxes = box_trans(image, bboxes, *params)
+            image = self.transform[0](image)
 
         return image, bboxes, labels
